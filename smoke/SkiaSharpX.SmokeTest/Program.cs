@@ -51,8 +51,8 @@ using (var document = SKDocument.CreatePdf(output))
     canvas.Clear(SKColors.White);
 
     // Deliberately use only a tiny glyph set from a very large CJK TTF.
-    canvas.DrawText("SkiaSharpX PDF 字体子集测试 123", 48f, 100f, font, paint);
-    canvas.DrawText("中文：你好，世界。", 48f, 155f, font, paint);
+    canvas.DrawText("SkiaSharpX PDF 字体子集测试 123", 48f, 100f, SKTextAlign.Left, font, paint);
+    canvas.DrawText("中文：你好，世界。", 48f, 155f, SKTextAlign.Left, font, paint);
 
     document.EndPage();
     document.Close();
