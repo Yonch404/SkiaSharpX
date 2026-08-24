@@ -88,6 +88,55 @@ jobs:
         shell: pwsh
         run: dotnet tool restore
 
+      - name: Detect Visual Studio and Spectre toolset
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path $vswhere)) {
+            throw "vswhere.exe was not found: $vswhere"
+          }
+
+          # SkiaSharp's Windows Cake script expects VS_INSTALL and explicitly
+          # searches VS_INSTALL/VC/Tools/MSVC/*/lib/spectre/x64.
+          $vsArgs = @(
+            '-latest',
+            '-products', '*',
+            '-requires',
+            'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+            'Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre',
+            '-property', 'installationPath'
+          )
+          $vsInstall = (& $vswhere @vsArgs).Trim()
+
+          if ([string]::IsNullOrWhiteSpace($vsInstall) -or !(Test-Path $vsInstall)) {
+            throw 'Could not locate a Visual Studio installation containing the x64 C++ toolchain and Spectre libraries.'
+          }
+
+          $msvcRoot = Join-Path $vsInstall 'VC\Tools\MSVC'
+          $toolsets = @(Get-ChildItem $msvcRoot -Directory | Where-Object {
+            Test-Path (Join-Path $_.FullName 'lib\spectre\x64')
+          } | Sort-Object { [version]$_.Name } -Descending)
+
+          if ($toolsets.Count -eq 0) {
+            Write-Host "Visual Studio: $vsInstall"
+            if (Test-Path $msvcRoot) {
+              Get-ChildItem $msvcRoot -Directory | ForEach-Object {
+                Write-Host "MSVC toolset found: $($_.Name)"
+              }
+            }
+            throw 'No installed MSVC toolset contains lib\spectre\x64.'
+          }
+
+          $toolset = $toolsets[0]
+          $spectrePath = Join-Path $toolset.FullName 'lib\spectre\x64'
+
+          "VS_INSTALL=$vsInstall" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VC_TOOLSET_VERSION=$($toolset.Name)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          Write-Host "VS_INSTALL=$vsInstall"
+          Write-Host "VC_TOOLSET_VERSION=$($toolset.Name)"
+          Write-Host "Spectre x64 libs=$spectrePath"
+
       - name: Build custom libSkiaSharp
         working-directory: upstream/SkiaSharp
         shell: pwsh
@@ -100,6 +149,8 @@ jobs:
             --target=libSkiaSharp `
             --buildarch=x64 `
             --configuration=Release `
+            --vsinstall="$env:VS_INSTALL" `
+            --vcToolsetVersion="$env:VC_TOOLSET_VERSION" `
             --verbosity=Normal
 
       - name: Verify native build configuration
