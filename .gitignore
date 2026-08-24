@@ -1,0 +1,8 @@
+upstream/
+dist/
+smoke/**/bin/
+smoke/**/obj/
+smoke-output/
+*.user
+*.suo
+.vs/

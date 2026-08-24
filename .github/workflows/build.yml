@@ -1,0 +1,233 @@
+name: Build SkiaSharpX
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  SKIASHARP_VERSION: '4.151.1'
+  SKIASHARP_REF: 'v4.151.1'
+  EXPECTED_SKIA_SHA: 'bdd0c3a8eaba1afa7148f02bba3a07f94e682847'
+  SKIASHARPX_REVISION: 'x1'
+  ADDITIONAL_GN_ARGS: 'skia_pdf_subset_harfbuzz=true skia_use_system_harfbuzz=false'
+
+jobs:
+  build-windows-x64:
+    name: Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout SkiaSharpX
+        uses: actions/checkout@v4
+
+      - name: Checkout upstream SkiaSharp
+        uses: actions/checkout@v4
+        with:
+          repository: mono/SkiaSharp
+          ref: ${{ env.SKIASHARP_REF }}
+          path: upstream/SkiaSharp
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Verify upstream Skia commit
+        shell: pwsh
+        run: |
+          $actual = (git -C upstream/SkiaSharp/externals/skia rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to read the checked-out Skia submodule commit.'
+          }
+          if ($actual -ne '${{ env.EXPECTED_SKIA_SHA }}') {
+            throw "Unexpected Skia commit. Expected ${{ env.EXPECTED_SKIA_SHA }} but got $actual"
+          }
+          Write-Host "Skia submodule: $actual"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Setup .NET from upstream global.json
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: upstream/SkiaSharp/global.json
+
+      - name: Install Ninja and 7-Zip
+        shell: pwsh
+        run: |
+          choco install ninja 7zip -y --no-progress
+          ninja --version
+          7z | Select-Object -First 2
+
+      - name: Install upstream-pinned LLVM
+        working-directory: upstream/SkiaSharp
+        shell: pwsh
+        run: |
+          $llvmHome = Join-Path $env:RUNNER_TEMP 'skiasharpx-llvm'
+          if (Test-Path $llvmHome) {
+            Remove-Item $llvmHome -Recurse -Force
+          }
+
+          ./scripts/infra/native/windows/install-llvm.ps1 `
+            -Version '19.1.1' `
+            -InstallDestination $llvmHome
+
+          "LLVM_HOME=$llvmHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & (Join-Path $llvmHome 'bin/clang.exe') --version
+
+      - name: Restore upstream .NET tools
+        working-directory: upstream/SkiaSharp
+        shell: pwsh
+        run: dotnet tool restore
+
+      - name: Build custom libSkiaSharp
+        working-directory: upstream/SkiaSharp
+        shell: pwsh
+        run: |
+          Write-Host "ADDITIONAL_GN_ARGS=$env:ADDITIONAL_GN_ARGS"
+
+          # Invoke the native Windows Cake file directly so this job builds only
+          # libSkiaSharp, not the separate libHarfBuzzSharp wrapper target.
+          dotnet cake native/windows/build.cake `
+            --target=libSkiaSharp `
+            --buildarch=x64 `
+            --configuration=Release `
+            --verbosity=Normal
+
+      - name: Verify native build configuration
+        shell: pwsh
+        run: |
+          ./scripts/verify-build.ps1 `
+            -SkiaSharpRoot ./upstream/SkiaSharp `
+            -ExpectedSkiaSha '${{ env.EXPECTED_SKIA_SHA }}'
+
+      - name: Build PDF smoke test
+        shell: pwsh
+        run: |
+          dotnet build ./smoke/SkiaSharpX.SmokeTest/SkiaSharpX.SmokeTest.csproj `
+            -c Release `
+            -r win-x64 `
+            --no-self-contained
+
+      - name: Inject custom native DLL into smoke test
+        shell: pwsh
+        run: |
+          $custom = (Resolve-Path './upstream/SkiaSharp/output/native/windows/x64/libSkiaSharp.dll').Path
+          $testOut = (Resolve-Path './smoke/SkiaSharpX.SmokeTest/bin/Release/net8.0/win-x64').Path
+
+          # Replace every native copy restored by the official NuGet package,
+          # then also put the custom DLL next to the managed executable.
+          Get-ChildItem $testOut -Recurse -Filter 'libSkiaSharp.dll' -File | ForEach-Object {
+            Copy-Item $custom $_.FullName -Force
+          }
+          Copy-Item $custom (Join-Path $testOut 'libSkiaSharp.dll') -Force
+
+          Write-Host "Smoke-test output: $testOut"
+          Get-ChildItem $testOut -Recurse -Filter 'libSkiaSharp.dll' -File | ForEach-Object {
+            Write-Host "$($_.FullName)  $($_.Length) bytes"
+          }
+
+      - name: Download large CJK TrueType smoke-test font
+        shell: pwsh
+        run: |
+          $font = Join-Path $env:RUNNER_TEMP 'LXGWWenKai-Regular.ttf'
+          $url = 'https://github.com/lxgw/LxgwWenKai/raw/refs/tags/v1.522/fonts/TTF/LXGWWenKai-Regular.ttf'
+          Invoke-WebRequest -Uri $url -OutFile $font
+
+          $size = (Get-Item $font).Length
+          if ($size -lt 10MB) {
+            throw "Downloaded font is unexpectedly small ($size bytes)."
+          }
+
+          "SMOKE_FONT=$font" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Downloaded smoke-test font: $size bytes"
+
+      - name: Run PDF subset smoke test
+        shell: pwsh
+        run: |
+          $testOut = (Resolve-Path './smoke/SkiaSharpX.SmokeTest/bin/Release/net8.0/win-x64').Path
+          $testDll = Join-Path $testOut 'SkiaSharpX.SmokeTest.dll'
+          $pdf = Join-Path $env:RUNNER_TEMP 'skiasharpx-subset-smoke.pdf'
+
+          dotnet $testDll $env:SMOKE_FONT $pdf
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "PDF subset smoke test failed with exit code $LASTEXITCODE."
+          }
+
+          $fontSize = (Get-Item $env:SMOKE_FONT).Length
+          $pdfSize = (Get-Item $pdf).Length
+          $ratio = $pdfSize / $fontSize
+
+          @"
+          ## PDF subset smoke test
+
+          - Source CJK TTF: $fontSize bytes
+          - Generated PDF: $pdfSize bytes
+          - PDF/font ratio: $([math]::Round($ratio * 100, 2))%
+          - Result: PASS
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Stage artifact
+        shell: pwsh
+        run: |
+          $dist = Join-Path $PWD 'dist'
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+
+          $sourceDir = Resolve-Path './upstream/SkiaSharp/output/native/windows/x64'
+          Copy-Item (Join-Path $sourceDir 'libSkiaSharp.dll') $dist -Force
+          Copy-Item (Join-Path $sourceDir 'libSkiaSharp.pdb') $dist -Force
+
+          $dll = Join-Path $dist 'libSkiaSharp.dll'
+          $dllHash = (Get-FileHash $dll -Algorithm SHA256).Hash
+          $dllSize = (Get-Item $dll).Length
+          $actualSkiaSha = (git -C upstream/SkiaSharp/externals/skia rev-parse HEAD).Trim()
+          $upstreamSha = (git -C upstream/SkiaSharp rev-parse HEAD).Trim()
+
+          @"
+          SkiaSharpX ${{ env.SKIASHARP_VERSION }}-${{ env.SKIASHARPX_REVISION }}
+          Platform: win-x64
+          Upstream SkiaSharp ref: ${{ env.SKIASHARP_REF }}
+          Upstream SkiaSharp commit: $upstreamSha
+          Skia commit: $actualSkiaSha
+          GN overrides: $env:ADDITIONAL_GN_ARGS
+          skia_use_harfbuzz: false (official SkiaSharp Windows setting)
+          skia_use_icu: false (official SkiaSharp Windows setting)
+          libSkiaSharp.dll size: $dllSize bytes
+          libSkiaSharp.dll SHA256: $dllHash
+          GitHub repository: $env:GITHUB_REPOSITORY
+          GitHub run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
+          "@ | Set-Content (Join-Path $dist 'build-info.txt') -Encoding utf8
+
+          Get-ChildItem $dist | Format-Table Name, Length
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkiaSharpX-${{ env.SKIASHARP_VERSION }}-${{ env.SKIASHARPX_REVISION }}-win-x64
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 9
+
+      - name: Create GitHub Release for tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $expectedTag = 'v${{ env.SKIASHARP_VERSION }}-${{ env.SKIASHARPX_REVISION }}'
+          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+            throw "Release tag must be '$expectedTag', but workflow was triggered by '$env:GITHUB_REF_NAME'."
+          }
+
+          gh release create $env:GITHUB_REF_NAME `
+            ./dist/libSkiaSharp.dll `
+            ./dist/libSkiaSharp.pdb `
+            ./dist/build-info.txt `
+            --title "SkiaSharpX ${{ env.SKIASHARP_VERSION }}-${{ env.SKIASHARPX_REVISION }}" `
+            --generate-notes
