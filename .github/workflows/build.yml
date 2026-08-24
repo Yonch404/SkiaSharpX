@@ -130,11 +130,21 @@ jobs:
           $toolset = $toolsets[0]
           $spectrePath = Join-Path $toolset.FullName 'lib\spectre\x64'
 
+          # Skia's get_vcvars_version.py returns the first 4 characters of the
+          # full MSVC toolset version (for example 14.44.35207 -> 14.4).
+          # BUILDCONFIG.gn then expands this prefix to locate the exact directory.
+          if ($toolset.Name.Length -lt 4) {
+            throw "Unexpected MSVC toolset version: $($toolset.Name)"
+          }
+          $vcVarsVersion = $toolset.Name.Substring(0, 4)
+
           "VS_INSTALL=$vsInstall" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "VC_TOOLSET_VERSION=$($toolset.Name)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VC_TOOLSET_VERSION=$vcVarsVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "MSVC_TOOLSET_FULL_VERSION=$($toolset.Name)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
           Write-Host "VS_INSTALL=$vsInstall"
-          Write-Host "VC_TOOLSET_VERSION=$($toolset.Name)"
+          Write-Host "VC_TOOLSET_VERSION=$vcVarsVersion"
+          Write-Host "MSVC_TOOLSET_FULL_VERSION=$($toolset.Name)"
           Write-Host "Spectre x64 libs=$spectrePath"
 
       - name: Build custom libSkiaSharp
