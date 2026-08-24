@@ -14,7 +14,10 @@ env:
   SKIASHARP_REF: 'v4.151.1'
   EXPECTED_SKIA_SHA: 'bdd0c3a8eaba1afa7148f02bba3a07f94e682847'
   SKIASHARPX_REVISION: 'x1'
-  ADDITIONAL_GN_ARGS: 'skia_pdf_subset_harfbuzz=true skia_use_system_harfbuzz=false'
+  ADDITIONAL_GN_ARGS: >-
+    skia_pdf_subset_harfbuzz=true
+    skia_use_system_harfbuzz=false
+    extra_cflags += [ '-flto=thin' ]
 
 jobs:
   build-windows-x64:
@@ -195,6 +198,7 @@ jobs:
           Upstream SkiaSharp ref: ${{ env.SKIASHARP_REF }}
           Upstream SkiaSharp commit: $upstreamSha
           Skia commit: $actualSkiaSha
+          Optimization profile: O2 (upstream Release default) + ThinLTO
           GN overrides: $env:ADDITIONAL_GN_ARGS
           skia_use_harfbuzz: false (official SkiaSharp Windows setting)
           skia_use_icu: false (official SkiaSharp Windows setting)

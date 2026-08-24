@@ -52,6 +52,34 @@ if (!(Test-Path $dll)) {
     throw "Built native library was not found: $dll"
 }
 
+
+# Verify ThinLTO was added without replacing Skia's normal Release optimization.
+# Skia's Windows Release optimize config contributes /O2. SkiaSharpX only adds
+# -flto=thin, leaving the upstream optimization level unchanged.
+$ninjaFiles = Get-ChildItem -Path $outDir -Filter '*.ninja' -Recurse -File
+$ninjaText = ($ninjaFiles | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
+
+if ($ninjaText -notmatch [regex]::Escape('-flto=thin')) {
+    throw "Required optimization flag '-flto=thin' was not found in the generated Ninja graph."
+}
+
+# Confirm at least one generated compile command contains both the upstream /O2
+# Release optimization and the custom ThinLTO flag. No O3/LTO-backend override is
+# used: lld-link therefore keeps its normal LTO optimization level (O2).
+$optimizationOk = $false
+foreach ($line in ($ninjaText -split "`r?`n")) {
+    $o2 = $line.IndexOf('/O2', [System.StringComparison]::OrdinalIgnoreCase)
+    $thin = $line.IndexOf('-flto=thin', [System.StringComparison]::Ordinal)
+    if ($o2 -ge 0 -and $thin -ge 0) {
+        $optimizationOk = $true
+        break
+    }
+}
+
+if (!$optimizationOk) {
+    throw 'Could not confirm a generated compile command with upstream /O2 and ThinLTO enabled.'
+}
+
 # The GN PDF target must propagate this define to the generated Ninja graph.
 # This is stronger than only checking args.gn.
 $defineFound = $false
@@ -75,4 +103,4 @@ Write-Host "Skia commit: $actualSkiaSha"
 Write-Host "Native DLL:   $($item.FullName)"
 Write-Host "DLL size:     $($item.Length) bytes"
 Write-Host "DLL SHA256:   $hash"
-Write-Host 'PDF HarfBuzz subset build verification passed.'
+Write-Host 'PDF HarfBuzz subset + upstream O2 + ThinLTO build verification passed.'
