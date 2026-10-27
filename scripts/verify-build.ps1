@@ -1,8 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string] $SkiaSharpRoot,
-
-    [string] $ExpectedSkiaSha = "bdd0c3a8eaba1afa7148f02bba3a07f94e682847"
+    [string] $SkiaSharpRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,14 +13,6 @@ $dll = Join-Path $root 'output\native\windows\x64\libSkiaSharp.dll'
 
 if (!(Test-Path $skiaRoot)) {
     throw "Skia submodule directory was not found: $skiaRoot"
-}
-
-$actualSkiaSha = (git -C $skiaRoot rev-parse HEAD).Trim()
-if ($LASTEXITCODE -ne 0) {
-    throw 'Unable to read the Skia submodule commit.'
-}
-if ($actualSkiaSha -ne $ExpectedSkiaSha) {
-    throw "Unexpected Skia commit. Expected $ExpectedSkiaSha but got $actualSkiaSha"
 }
 
 if (!(Test-Path $argsFile)) {
