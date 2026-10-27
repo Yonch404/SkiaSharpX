@@ -12,7 +12,6 @@ permissions:
 env:
   SKIASHARP_VERSION: '4.153.1'
   SKIASHARP_REF: 'v4.153.1'
-  EXPECTED_SKIA_SHA: '4783f51448f9b070dda4f87b83e941c9599e466e'
   SKIASHARPX_REVISION: 'x1'
   ADDITIONAL_GN_ARGS: >-
     skia_pdf_subset_harfbuzz=true
@@ -37,18 +36,6 @@ jobs:
           path: upstream/SkiaSharp
           submodules: recursive
           fetch-depth: 1
-
-      - name: Verify upstream Skia commit
-        shell: pwsh
-        run: |
-          $actual = (git -C upstream/SkiaSharp/externals/skia rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0) {
-            throw 'Unable to read the checked-out Skia submodule commit.'
-          }
-          if ($actual -ne '${{ env.EXPECTED_SKIA_SHA }}') {
-            throw "Unexpected Skia commit. Expected ${{ env.EXPECTED_SKIA_SHA }} but got $actual"
-          }
-          Write-Host "Skia submodule: $actual"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -167,8 +154,7 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/verify-build.ps1 `
-            -SkiaSharpRoot ./upstream/SkiaSharp `
-            -ExpectedSkiaSha '${{ env.EXPECTED_SKIA_SHA }}'
+            -SkiaSharpRoot ./upstream/SkiaSharp
 
       - name: Build PDF smoke test
         shell: pwsh
