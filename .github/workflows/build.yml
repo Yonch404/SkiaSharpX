@@ -12,7 +12,7 @@ permissions:
 env:
   SKIASHARP_VERSION: '4.153.1'
   SKIASHARP_REF: 'v4.153.1'
-  EXPECTED_SKIA_SHA: 'bdd0c3a8eaba1afa7148f02bba3a07f94e682847'
+  EXPECTED_SKIA_SHA: '4783f51448f9b070dda4f87b83e941c9599e466e'
   SKIASHARPX_REVISION: 'x1'
   ADDITIONAL_GN_ARGS: >-
     skia_pdf_subset_harfbuzz=true
